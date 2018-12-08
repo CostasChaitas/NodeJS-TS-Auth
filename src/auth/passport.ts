@@ -1,15 +1,17 @@
 import passport from "passport";
-import request from "request";
 import passportLocal from "passport-local";
 import passportFacebook from "passport-facebook";
-import _ from "lodash";
+//import passportGoogle from "passport-google-plus-token";
+import passportJWT from "passport-jwt";
+import { ExtractJwt } from "passport-jwt";
 
-// import { User, UserType } from '../models/User';
 import { default as User } from "../models/User";
 import { Request, Response, NextFunction } from "express";
 
 const LocalStrategy = passportLocal.Strategy;
 const FacebookStrategy = passportFacebook.Strategy;
+//const GoogleStrategy = passportGoogle.Strategy;
+const JWTStrategy = passportJWT.Strategy;
 
 passport.serializeUser<any, any>((user, done) => {
   done(undefined, user.id);
@@ -39,6 +41,25 @@ passport.use(new LocalStrategy({ usernameField: "email" }, (email, password, don
       return done(undefined, false, { message: "Invalid email or password." });
     });
   });
+}));
+
+// JSON WEB TOKENS STRATEGY
+passport.use(new JWTStrategy({
+  jwtFromRequest: ExtractJwt.fromAuthHeaderWithScheme("bearer"),
+  secretOrKey: process.env.JWT_SECRET
+}, async (payload, done) => {
+  try {
+    // Find the user specified in token
+    const user = await User.findById(payload.sub);
+    // If user doesn't exists, handle it
+    if (!user) {
+      return done(undefined, false);
+    }
+    // Otherwise, return the user
+    return done(undefined, user);
+  } catch (error) {
+    return done(error, false);
+  }
 }));
 
 
@@ -72,7 +93,6 @@ passport.use(new FacebookStrategy({
     User.findOne({ facebook: profile.id }, (err, existingUser) => {
       if (err) { return done(err); }
       if (existingUser) {
-        req.flash("errors", { msg: "There is already a Facebook account that belongs to you. Sign in with that account or delete it, then link it with your current account." });
         done(err);
       } else {
         User.findById(req.user.id, (err, user: any) => {
@@ -83,7 +103,6 @@ passport.use(new FacebookStrategy({
           user.profile.gender = user.profile.gender || profile._json.gender;
           user.profile.picture = user.profile.picture || `https://graph.facebook.com/${profile.id}/picture?type=large`;
           user.save((err: Error) => {
-            req.flash("info", { msg: "Facebook account has been linked." });
             done(err, user);
           });
         });
@@ -118,25 +137,63 @@ passport.use(new FacebookStrategy({
   }
 }));
 
-/**
- * Login Required middleware.
- */
-export let isAuthenticated = (req: Request, res: Response, next: NextFunction) => {
-  if (req.isAuthenticated()) {
-    return next();
-  }
-  res.redirect("/login");
-};
 
 /**
- * Authorization Required middleware.
- */
-export let isAuthorized = (req: Request, res: Response, next: NextFunction) => {
-  const provider = req.path.split("/").slice(-1)[0];
+ * Sign in with Google.
+ 
+passport.use('googleToken', new GoogleStrategy({
+  clientID: process.env.GOOGLE_ID,
+  clientSecret: process.env.GOOGLE_SECRET
+}, async (req: any, accessToken, refreshToken, profile, done) => {
+  try {
 
-  if (_.find(req.user.tokens, { kind: provider })) {
-    next();
-  } else {
-    res.redirect(`/auth/${provider}`);
+    if (req.user) {
+      User.findOne({ google: profile.id }, (err, existingUser) => {
+        if (err) { return done(err); }
+        if (existingUser) {
+          done(err);
+        } else {
+          User.findById(req.user.id, (err, user: any) => {
+            if (err) { return done(err); }
+            user.google = profile.id;
+            user.tokens.push({ kind: "google", accessToken });
+            user.profile.name = user.profile.name || `${profile.name.givenName} ${profile.name.familyName}`;
+            user.profile.gender = user.profile.gender || profile._json.gender;
+            user.profile.picture = user.profile.picture || `https://graph.facebook.com/${profile.id}/picture?type=large`;
+            user.save((err: Error) => {
+              done(err, user);
+            });
+          });
+        }
+      });
+    }else {
+      User.findOne({ google: profile.id }, (err, existingUser) => {
+        if (err) { return done(err); }
+        if (existingUser) {
+          return done(undefined, existingUser);
+        }
+        User.findOne({ email: profile._json.email }, (err, existingEmailUser) => {
+          if (err) { return done(err); }
+          if (existingEmailUser) {
+            done(err);
+          } else {
+            const user: any = new User();
+            user.email = profile._json.email;
+            user.facebook = profile.id;
+            user.tokens.push({ kind: "google", accessToken });
+            user.profile.name = `${profile.name.givenName} ${profile.name.familyName}`;
+            user.profile.gender = profile._json.gender;
+            user.profile.picture = `https://graph.facebook.com/${profile.id}/picture?type=large`;
+            user.profile.location = (profile._json.location) ? profile._json.location.name : "";
+            user.save((err: Error) => {
+              done(err, user);
+            });
+          }
+        });
+      });
+    }
+  } catch (error) {
+    return done(error, false, error.message);
   }
-};
+}));
+*/
